@@ -1,0 +1,12 @@
+{
+  "name": "ccq-nft",
+  "version": "1.0.0",
+  "main": "index.js",
+  "repository": "https://github.com/tandeltalabs/ccq-nft.git",
+  "author": "Tan",
+  "license": "MIT",
+  "dependencies": {
+    "@openzeppelin/contracts": "^4.8.2",
+    "web3": "^1.8.2"
+  }
+}
