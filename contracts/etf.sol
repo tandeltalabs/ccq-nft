@@ -85,23 +85,27 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         string memory _name, 
         uint256 _issueDate, 
         uint256 _totalSupply, 
-        uint256 _intervestTerm, 
+        uint256 _intervestTerm,
+        uint256 _numberTerm, 
+        uint256 _intervestTermRate,
         uint256 _price,
         address _paymentToken,
         address _marketplace
     ) ERC1155("") {
         paymentToken = _paymentToken;
         marketplace = _marketplace;
+        numberTerm = _numberTerm;
+        intervestTermRate = _intervestTermRate;
 
         etfInfor.publisher = _publisher;
         etfInfor.name = _name;
         etfInfor.issueDate = _issueDate;
-        etfInfor.expireDate = _issueDate + numberTerm * _intervestTerm * unitTime;
+        etfInfor.expireDate = _issueDate + _numberTerm * _intervestTerm * unitTime;
         etfInfor.intervestTerm = _intervestTerm;
         etfInfor.price = _price * 1 ether;
         etfInfor.totalSupply = _totalSupply;
 
-        onceTermIntervest = (_totalSupply*(((_price * 1 ether * intervestTermRate)/baseRate) * _intervestTerm)/365)/(1 ether);
+        onceTermIntervest = _totalSupply*(((_price * 1 ether * _intervestTermRate)/baseRate) * _intervestTerm)/365;
 
         interestRate.push(InterestRate(1, 14, 60));
         interestRate.push(InterestRate(15, 29, 70));
@@ -126,7 +130,7 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
     }
 
     modifier onlyPublisher(address _user){
-        require(_user > etfInfor.publisher, "must be publisher");
+        require(_user == etfInfor.publisher, "must be publisher");
         _;
     }
 
@@ -155,18 +159,20 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         internal
     {   
         _mint(_publisher, PUBLISHER_TOKEN_WRAPPED_ID, _totalSupply, "");
-        
+
+        // update nft owner and holding time
         tokensOwned[_publisher].push(PUBLISHER_TOKEN_WRAPPED_ID);
         holders[_publisher][PUBLISHER_TOKEN_WRAPPED_ID] = block.timestamp;
+
+        // create vesting list
         uint256 vestingAmount = (((_price * intervestTermRate)/baseRate)*_intervestTerm)/365;
-        uint256 parsedValue = etherFromWei(vestingAmount);
         uint256 vestingTime =_issueDate;
+
         for (uint256 index = 0; index < numberTerm; index++) {
             vestingTime += (_intervestTerm * (unitTime));
-            userVest[_publisher][PUBLISHER_TOKEN_WRAPPED_ID].push(Vest(parsedValue, false, vestingTime, 0));
+            userVest[_publisher][PUBLISHER_TOKEN_WRAPPED_ID].push(Vest(vestingAmount, false, vestingTime, 0));
         }
 
-        // push even wrap
     }
 
     /* user sell nft for publisher */ 
@@ -174,7 +180,8 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         public
         whenNotPaused
         whenNotExpired
-    {   
+    {       
+        // validate
         uint256 timeNow = block.timestamp;
         require(exists(tokenId), "NFT not exist");
         uint256 balance = balanceOf(msg.sender, tokenId);
@@ -193,11 +200,13 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         userVest[etfInfor.publisher][currentId] = userVest[msg.sender][tokenId];
         tokensOwned[etfInfor.publisher].push(currentId);
 
+        // update nft owner
         if(balance == amount){
             removeByTokenId(msg.sender, tokenId);
             delete holders[msg.sender][tokenId];
             delete userVest[msg.sender][tokenId];
         }
+
         // transfer money and profit when sold NFT
         uint256 issueDate = etfInfor.issueDate;
         uint256 intervestTerm = etfInfor.intervestTerm;
@@ -217,9 +226,13 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
             if(remindNumber > 0){
                 currentTerm += 1;
             }
+
+            if(currentTerm > numberTerm){
+                currentTerm = numberTerm;
+            }
         
-            if(currentTerm > 0 && etherFromWei(priceSellNow.profit) > 0){
-                userVest[etfInfor.publisher][currentId][currentTerm - 1].intervestPayed += etherFromWei(priceSellNow.profit);
+            if(currentTerm > 0 && priceSellNow.profit > 0){
+                userVest[etfInfor.publisher][currentId][currentTerm - 1].intervestPayed += priceSellNow.profit;
             }
         }
 
@@ -270,13 +283,15 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         whenNotExpired
     {
         address seller = msg.sender;
-        // check amount
+        // validate amount
         require(balanceOf(seller, tokenId) >= amount, "amount must be less than or equal to balance");
+
         // transfer nft to contract
         uint256 orderId = _orderId.current();
 
         safeTransferFrom(seller, address(this), tokenId, amount, "");
 
+        // update order
         orderP2P[seller].push(NFTTradeP2P(orderId, buyer, true, tokenId, block.timestamp, amount, price));
         orderP2P[buyer].push(NFTTradeP2P(orderId, seller, false, tokenId, block.timestamp, amount, price));
 
@@ -339,17 +354,28 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         address seller = buyItem.user;
         // payment
         IERC20(paymentToken).safeTransferFrom(buyer, seller, buyItem.price);
-        // transfer etf
+
+        // transfer nft
         _burn(address(this), buyItem.tokenId, buyItem.amount);
         uint256 currentId = Counters.current(_fcwId);
         _mint(buyer, currentId, buyItem.amount, "");
+
         // update information
         holders[buyer][currentId] = block.timestamp;
         userVest[buyer][currentId] = userVest[seller][buyItem.tokenId]; 
         tokensOwned[buyer].push(currentId);
+
         uint256 holdingTime;
         unchecked {
-            holdingTime = (block.timestamp - holders[seller][buyItem.tokenId])/unitTime;
+            uint256 currentTime =  holders[seller][buyItem.tokenId];
+            for (uint256 index = 1; index <= numberTerm; index++) {
+                uint256 startDate = etfInfor.issueDate + (etfInfor.intervestTerm * (index - 1) * unitTime);
+                uint256 endDate = etfInfor.issueDate + (etfInfor.intervestTerm * index * unitTime);
+
+                if(currentTime > startDate && currentTime <= endDate){
+                    holdingTime = (currentTime - startDate)/(unitTime);
+                }
+            }
         }
 
         if(balanceOf(seller, buyItem.tokenId) == 0){
@@ -384,7 +410,8 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
             "token was vested or not in time vested"
         );
 
-        IERC20(paymentToken).safeTransfer(account, balance * vestItem.amount);
+        uint256 etherValue = etherFromWei(balance * vestItem.amount);
+        IERC20(paymentToken).safeTransfer(account, etherValue);
         userVest[account][_tokenId][_index].isVested = true;
     }
 
@@ -396,7 +423,7 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         return userVest[_user][_tokenId];
     }
 
-    function withdrawIntervest()
+    function withdrawIntervest(uint256 _termIndex)
         onlyPublisher(msg.sender)
         public
     {   
@@ -405,65 +432,62 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
             uint256 tokenId = tokensOwned[msg.sender][index];
             uint256 balance = balanceOf(account, tokenId);
             if(balance > 0){
-                Vest[] memory vestlists = userVest[account][tokenId];
+                Vest memory vestItem = userVest[account][tokenId][_termIndex];
                 uint256 currentTime = block.timestamp;
-                for (uint256 i = 0; i < vestlists.length; i++) {
-                    if(
-                        (currentTime >= vestlists[i].vestDate && currentTime < vestlists[i+1].vestDate || 
-                        i == (vestlists.length - 1) && currentTime >= vestlists[i].vestDate) &&
-                        vestlists[i].isVested == false
-                    ){
-                        uint256 intervest = (balance * vestlists[i].amount) - vestlists[i].intervestPayed;
-                        IERC20(paymentToken).safeTransfer(account, intervest);
-                        userVest[account][tokenId][i].isVested = true;
-                    }
+                if(
+                    currentTime >= vestItem.vestDate && vestItem.isVested == false
+                ){
+                    uint256 intervest = (balance * vestItem.amount) - vestItem.intervestPayed;
+                    uint256 etherValue = etherFromWei(intervest);
+                    IERC20(paymentToken).safeTransfer(account, etherValue);
+                    userVest[account][tokenId][_termIndex].isVested = true;
                 }
             }
         }
     }
 
     function payIntervest(uint256 _paymentDate) public {
-        IERC20(paymentToken).safeTransferFrom(msg.sender, address(this), onceTermIntervest);
+        uint256 etherValue = etherFromWei(onceTermIntervest);
+        IERC20(paymentToken).safeTransferFrom(msg.sender, address(this), etherValue);
         totalIntervestPayed += onceTermIntervest;
         intervestHistory[msg.sender][_paymentDate] = true;
     }
 
     function payAdvanceIntervest(uint256 _paymentDate) public {
-        IERC20(paymentToken).safeTransferFrom(msg.sender, address(this), onceTermIntervest);
+        uint256 etherValue = etherFromWei(onceTermIntervest);
+        IERC20(paymentToken).safeTransferFrom(msg.sender, address(this), etherValue);
         totalAdvanceIntervest += onceTermIntervest;
         intervestTempHistory[msg.sender][_paymentDate] = true;
     }
 
     function withdrawAdvanceIntervest() public onlyPublisher(msg.sender) onlyExpireDate {
-        require(totalIntervestPayed == (onceTermIntervest * numberTerm), "issuer need payment all of intervest");
-        IERC20(paymentToken).safeTransfer(msg.sender, totalAdvanceIntervest);
+        require(totalIntervestPayed == (onceTermIntervest * numberTerm), "fundgo need pay all of intervest");
+        uint256 etherValue = etherFromWei(totalAdvanceIntervest);
+        IERC20(paymentToken).safeTransfer(msg.sender, etherValue);
         totalAdvanceIntervest = 0;
     }
 
     // return intervest after users trading
-    function getIntervest()
-        onlyPublisher(msg.sender)
+    function getIntervest(address _publisher, uint256 _termIndex)
+        onlyPublisher(_publisher)
         public
         view
         returns(uint256)
     {   
         uint256 totalIntervest;
-        address account = msg.sender;
-        for(uint256 index = 0; index < tokensOwned[msg.sender].length; index++) {
-            uint256 tokenId = tokensOwned[msg.sender][index];
+        address account = _publisher;
+        for(uint256 index = 0; index < tokensOwned[account].length; index++) {
+            uint256 tokenId = tokensOwned[account][index];
             uint256 balance = balanceOf(account, tokenId);
             if(balance > 0){
-                Vest[] memory vestlists = userVest[account][tokenId];
+                Vest memory vestItem = userVest[account][tokenId][_termIndex];
                 uint256 currentTime = block.timestamp;
-                for (uint256 i = 0; i < vestlists.length; i++) {
-                    if(
-                        (currentTime >= vestlists[i].vestDate && currentTime < vestlists[i+1].vestDate || 
-                        i == (vestlists.length - 1) && currentTime >= vestlists[i].vestDate) &&
-                        vestlists[i].isVested == false
-                    ){
-                        uint256 intervest = (balance * vestlists[i].amount) - vestlists[i].intervestPayed;
-                        totalIntervest += intervest;
-                    }
+              
+                if(
+                    currentTime >= vestItem.vestDate && vestItem.isVested == false
+                ){
+                    uint256 intervest = (balance * vestItem.amount) - vestItem.intervestPayed;
+                    totalIntervest += intervest;
                 }
             }
         }
@@ -496,18 +520,18 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         return basePrice;
     }
 
-    function redeem(uint256 tokenId, uint256 amount) public {
+    function redeem(uint256 tokenId, uint256 amount) public onlyExpireDate{
         address account = msg.sender;
-        require(block.timestamp >= etfInfor.expireDate, "not in redeem time");
-        // burn nft
+
         safeTransferFrom(account, address(this), tokenId, amount, "");
-        
+
         removeByTokenId(account, tokenId); 
         delete holders[account][tokenId];
         delete userVest[account][tokenId];
+
+        // refund to user
         uint256 totalValue = etfInfor.price * amount;
         uint256 parsedValue = etherFromWei(totalValue);
-        // refund to user
         IERC20(paymentToken).safeTransfer(account, parsedValue);
     }
 
@@ -556,7 +580,7 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         intervestTermRate = _intervestTermRate;
     }
 
-     function etherFromWei(uint256 _etherValue) pure internal returns(uint256) {
+    function etherFromWei(uint256 _etherValue) pure internal returns(uint256) {
         return _etherValue/(1 ether);
     }
 

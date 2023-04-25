@@ -67,6 +67,7 @@ contract FundCertMarketplace is Ownable, ERC1155Receiver, ReentrancyGuard{
     ) whenMarketOpen onlyPublisher(msg.sender) public {
         fundCertWrap = FundCertWrap(_nftAddress);
         require(fundCertWrap.isNotExpired(), "ETF was expired");
+
         fundCertWrap.customTransferFrom(msg.sender, address(this), _nftId, _amount);
         uint256 idWrap = fundCertWrap.getCurrentId();
         
@@ -86,10 +87,11 @@ contract FundCertMarketplace is Ownable, ERC1155Receiver, ReentrancyGuard{
     function buyItem(Cart[] calldata cart) external nonReentrant whenMarketOpen {
         for (uint256 i = 0; i < cart.length; i++) {
             Item memory itemSelected = items[cart[i].index];
-            require(cart[i].amount <= itemSelected.amount, "amount item selected must be less than or equal amount item selling");
-            // get current Price
+           
             fundCertWrap = FundCertWrap(itemSelected.nftAddress);
             require(fundCertWrap.isNotExpired(), "ETF was expired");
+            require(cart[i].amount <= itemSelected.amount, "amount item selected must be less than or equal amount item selling");
+
             uint256 nftPrice = fundCertWrap.getPriceAtTime(block.timestamp);
             uint256 actualValue = nftPrice * cart[i].amount;
             uint256 etherValueFromWei = actualValue/(1 ether);
