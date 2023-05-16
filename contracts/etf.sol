@@ -60,7 +60,7 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
 
     
     uint256 constant PUBLISHER_TOKEN_WRAPPED_ID = 0;
-    uint256 unitTime = 1 minutes;
+    uint256 unitTime = 1 hours;
     address public paymentToken;
     address public marketplace;
     uint256 public baseRate = 1000;
@@ -195,6 +195,16 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         // mint new NFT with same amount NFT was burned for publisher
         _mint(etfInfor.publisher, currentId, amount, "");
 
+        // transfer money and profit when sold NFT
+        uint256 issueDate = etfInfor.issueDate;
+        uint256 intervestTerm = etfInfor.intervestTerm;
+        uint256 totalAmount = 0;
+        PriceSellNow memory priceSellNow = getPriceWhenSellNow(msg.sender, tokenId);
+        totalAmount = (priceSellNow.price + priceSellNow.profit) * amount;
+        uint256 parsedValue = etherFromWei(totalAmount);
+
+        IERC20(paymentToken).safeTransfer(msg.sender, parsedValue);
+
         // update harvest information
         holders[etfInfor.publisher][currentId] = timeNow;
         userVest[etfInfor.publisher][currentId] = userVest[msg.sender][tokenId];
@@ -206,16 +216,6 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
             delete holders[msg.sender][tokenId];
             delete userVest[msg.sender][tokenId];
         }
-
-        // transfer money and profit when sold NFT
-        uint256 issueDate = etfInfor.issueDate;
-        uint256 intervestTerm = etfInfor.intervestTerm;
-        uint256 totalAmount = 0;
-        PriceSellNow memory priceSellNow = getPriceWhenSellNow(msg.sender, tokenId);
-        totalAmount = (priceSellNow.price + priceSellNow.profit) * amount;
-        uint256 parsedValue = etherFromWei(totalAmount);
-
-        IERC20(paymentToken).safeTransfer(msg.sender, parsedValue);
 
         // update intervest paid for trader
         unchecked {

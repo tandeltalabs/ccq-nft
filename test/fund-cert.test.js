@@ -10,7 +10,7 @@ function getEtherFromWie(wei){
 contract("FundCert", (accounts) => {
     const OWNER = accounts[0];
     const PUBLISHER_1 = accounts[1];
-    const BALANCE = '1000000000000000000000000';
+    const BALANCE = 1000000000;
     const ADDRESS_0 = '0x0000000000000000000000000000000000000000';
     const testBuyP2P = '100000000000000000000';
     const BUYER = accounts[2];
@@ -31,16 +31,24 @@ contract("FundCert", (accounts) => {
         await FundCertWrapContract.setApprovalForAll(FCMarketplaceContract.address, true, {from: PUBLISHER_1});
         // sell item to market
         await FCMarketplaceContract.sellItem(FundCertWrapContract.address, 0, 3000, {from: PUBLISHER_1});
-        await FCMarketplaceContract.sellItem(FundCertWrapContract.address, 0, 3000, {from: PUBLISHER_1});
-        await FCMarketplaceContract.sellItem(FundCertWrapContract.address, 0, 3000, {from: PUBLISHER_1});
         await BUSDContract.mint(BUYER, BALANCE);
         await BUSDContract.approve(FCMarketplaceContract.address, BALANCE, { from: BUYER});
+        const balanceVNDCbeforeBuy = await BUSDContract.balanceOf(BUYER);
+        console.log("balanceVNDCafterSellNow", balanceVNDCbeforeBuy.toNumber());
+        await FCMarketplaceContract.buyItem([[0, 3000]], {from: BUYER});
+        const pbAssetbefore = await FundCertWrapContract.getMyAsset(PUBLISHER_1);
+        console.log("pbAssetbefore", pbAssetbefore);
+        const buyerAssetbefore = await FundCertWrapContract.getMyAsset(BUYER);
+        console.log("buyerAssetbefore", buyerAssetbefore);
+        await FundCertWrapContract.sellNow(2, 3000, {from: BUYER});
+        const balanceVNDCafterSellNow = await BUSDContract.balanceOf(BUYER);
+        console.log("balanceVNDCafterSellNow", balanceVNDCafterSellNow.toNumber());
 
-        await FCMarketplaceContract.buyItem([[0, 1000],[1, 1000], [2, 1000]], {from: BUYER});
-        await FundCertWrapContract.sellNow(5, 1000, {from: BUYER});
-        const myAsset = await FundCertWrapContract.getMyAsset(BUYER);
-        console.log(myAsset);
-        // await FundCertWrapContract.sellNow()
+        const buyerAssetafter = await FundCertWrapContract.getMyAsset(BUYER);
+        console.log("buyerAssetafter", buyerAssetafter);
+        const pbAssetafter = await FundCertWrapContract.getMyAsset(PUBLISHER_1);
+        console.log("pbAssetafter", pbAssetafter);
+        // await FundCertWrapContract.sellNow();
        
        
         // const vestList = await FundCertWrapContract.getMyVestList(FCMarketplaceContract.address, 1);
@@ -88,24 +96,24 @@ contract("FundCert", (accounts) => {
     
     
     // user test
-    it("Buy 1 CQQ in market", async () => {
-        // const BUSDContract = await BUSD.deployed();
-        // const FCMarketplaceContract = await FCMarketplace.deployed();
-        // const FundCertWrapContract = await FundCertWrap.deployed();
+    // it("Buy 1 CQQ in market", async () => {
+    //     const BUSDContract = await BUSD.deployed();
+    //     const FCMarketplaceContract = await FCMarketplace.deployed();
+    //     const FundCertWrapContract = await FundCertWrap.deployed();
 
-        // await BUSDContract.mint(BUYER, BALANCE);
-        // await BUSDContract.approve(FCMarketplaceContract.address, BALANCE, { from: BUYER});
+    //     await BUSDContract.mint(BUYER, BALANCE);
+    //     await BUSDContract.approve(FCMarketplaceContract.address, BALANCE, { from: BUYER});
 
-        // await FCMarketplaceContract.buyItem([[0, 1000]], {from: BUYER});
-        // const balance1 = await FundCertWrapContract.balanceOf(BUYER, 2);
-        // const vestList = await FundCertWrapContract.getMyVestList(BUYER, 2);
+    //     await FCMarketplaceContract.buyItem([[0, 1000]], {from: BUYER});
+    //     const balance1 = await FundCertWrapContract.balanceOf(BUYER, 2);
+    //     const vestList = await FundCertWrapContract.getMyVestList(BUYER, 2);
         
-        // assert.equal(
-        //     balance1.toNumber(),
-        //     1000,
-        //     "balance wrong value"
-        // );
-    });
+    //     assert.equal(
+    //         balance1.toNumber(),
+    //         1000,
+    //         "balance wrong value"
+    //     );
+    // });
 
     // it("listP2P", async () => {
     //     const FundCertWrapContract = await FundCertWrap.deployed();
