@@ -29,6 +29,8 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         uint256 profit;
         uint256 rate;
         uint256 holdingTime;
+        uint256 profitPublisher;
+        uint256 actuallyPaidProfit;
     }
 
     struct Vest {
@@ -60,7 +62,7 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
 
     
     uint256 constant PUBLISHER_TOKEN_WRAPPED_ID = 0;
-    uint256 unitTime = 1 hours;
+    uint256 unitTime = 1 minutes;
     address public paymentToken;
     address public marketplace;
     uint256 public baseRate = 1000;
@@ -79,6 +81,8 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
     mapping(address => uint256[]) tokensOwned;
     mapping(address => mapping(uint256 => bool)) intervestHistory;
     mapping(address => mapping(uint256 => bool)) intervestTempHistory;
+    mapping(uint256 => uint256) profitOnceTerm;
+    mapping(uint256 => uint256) public actualUserProfit;
     
     constructor( 
         address _publisher,
@@ -232,7 +236,9 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
             }
         
             if(currentTerm > 0 && priceSellNow.profit > 0){
-                userVest[etfInfor.publisher][currentId][currentTerm - 1].intervestPayed += priceSellNow.profit;
+                userVest[etfInfor.publisher][currentId][currentTerm - 1].intervestPayed += priceSellNow.actuallyPaidProfit;
+                profitOnceTerm[currentTerm - 1] += priceSellNow.profitPublisher;
+                actualUserProfit[currentTerm - 1] += priceSellNow.profit;
             }
         }
 
@@ -249,6 +255,8 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         uint256 actuallyAmount = 0;
         uint256 holdingTime;
         uint256 rate;
+        uint256 profitPublisher;
+        uint256 actuallyPaidProfit;
         unchecked {
             uint256 etfTimeFromNow = (block.timestamp - issueDate)/unitTime;
             // case user sell nft in in term 
@@ -267,9 +275,11 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
                 profit = (((basePrice * rate)/baseRate)*holdingTime)/365;
                 actuallyAmount = basePrice;
             }
+            actuallyPaidProfit = (((basePrice * intervestTermRate)/baseRate)*holdingTime)/365;
+            profitPublisher = actuallyPaidProfit - profit;
         }
        
-        PriceSellNow memory priceSellNow = PriceSellNow(actuallyAmount, profit, rate, holdingTime);
+        PriceSellNow memory priceSellNow = PriceSellNow(actuallyAmount, profit, rate, holdingTime, profitPublisher, actuallyPaidProfit);
 
         return priceSellNow;
     }
@@ -444,11 +454,17 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
                 }
             }
         }
+
+        uint256 profit = profitOnceTerm[_termIndex];
+        if(profit > 0){
+            uint256 profitParsed = etherFromWei(profit);
+            IERC20(paymentToken).safeTransfer(account, profitParsed);
+        }
     }
 
     function payIntervest(uint256 _paymentDate) public {
         uint256 etherValue = etherFromWei(onceTermIntervest);
-        IERC20(paymentToken).safeTransferFrom(msg.sender, address(this), etherValue);
+        IERC20(paymentToken).safeTransferFrom(msg.sender, etfInfor.publisher, etherValue);
         totalIntervestPayed += onceTermIntervest;
         intervestHistory[msg.sender][_paymentDate] = true;
     }
@@ -468,31 +484,31 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
     }
 
     // return intervest after users trading
-    function getIntervest(address _publisher, uint256 _termIndex)
-        onlyPublisher(_publisher)
+    function getIntervest(uint256 _termIndex)
         public
         view
         returns(uint256)
     {   
-        uint256 totalIntervest;
-        address account = _publisher;
-        for(uint256 index = 0; index < tokensOwned[account].length; index++) {
-            uint256 tokenId = tokensOwned[account][index];
-            uint256 balance = balanceOf(account, tokenId);
-            if(balance > 0){
-                Vest memory vestItem = userVest[account][tokenId][_termIndex];
-                uint256 currentTime = block.timestamp;
+        // uint256 totalIntervest;
+        // address account = _publisher;
+        // for(uint256 index = 0; index < tokensOwned[account].length; index++) {
+        //     uint256 tokenId = tokensOwned[account][index];
+        //     uint256 balance = balanceOf(account, tokenId);
+        //     if(balance > 0){
+        //         Vest memory vestItem = userVest[account][tokenId][_termIndex];
+        //         uint256 currentTime = block.timestamp;
               
-                if(
-                    currentTime >= vestItem.vestDate && vestItem.isVested == false
-                ){
-                    uint256 intervest = (balance * vestItem.amount) - vestItem.intervestPayed;
-                    totalIntervest += intervest;
-                }
-            }
-        }
+        //         if(
+        //             currentTime >= vestItem.vestDate && vestItem.isVested == false
+        //         ){
+        //             uint256 intervest = (balance * vestItem.amount) - vestItem.intervestPayed;
+        //             totalIntervest += intervest;
+        //         }
+        //     }
+        // }
 
-        return totalIntervest;
+        // return totalIntervest;
+        return profitOnceTerm[_termIndex];
     }
 
     function isIntervestPayed(address _user, uint256 _paymentDate) public view returns(bool) {
