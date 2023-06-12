@@ -34,6 +34,11 @@ contract FundCertMarketplace is Ownable, ERC1155Receiver, ReentrancyGuard{
         FundCertWrap nftContract;
     }
 
+    struct SellItem {
+        uint256 id;
+        uint256 amount;
+    }
+
     struct Cart {
         uint256 index;
         uint256 amount;
@@ -58,37 +63,42 @@ contract FundCertMarketplace is Ownable, ERC1155Receiver, ReentrancyGuard{
 
     event _eventListNewItemToMarket(uint256 id, uint256 nftId, uint256 amount, address seller);
     event _eventDelistItem(uint256 id, uint256 nftId, uint256 amount, address seller);
-    event _eventBuyItemInMarket(uint256 id, uint256 nftId, uint256 amount, uint256 totalValue, address seller, address buyer);
+    event _eventBuyItemInMarket(uint256 id, uint256 nftId, uint256 amount, uint256 totalValue, address seller, address buyer, address contractAddress);
 
     function sellItem(
         address _nftAddress,
-        uint256 _nftId,
-        uint256 _amount
+        SellItem[] memory sellItems
     ) whenMarketOpen onlyPublisher(msg.sender) public {
         fundCertWrap = FundCertWrap(_nftAddress);
         require(fundCertWrap.isNotExpired(), "ETF was expired");
 
-        fundCertWrap.customTransferFrom(msg.sender, address(this), _nftId, _amount);
-        uint256 idWrap = fundCertWrap.getCurrentId();
-        
-        Item memory item;
-        item.id = id.current();
-        item.amount = _amount;
-        item.nftId = idWrap - 1;
-        item.nftAddress = _nftAddress;
-        item.seller = msg.sender;
-        item.nftContract = FundCertWrap(_nftAddress);
-        items.push(item);
-        id.increment();
+        for (uint i = 0; i < sellItems.length; i++) {
+            SellItem memory _sellItem = sellItems[i];
+            uint256 _nftId = _sellItem.id;
+            uint256 _amount = _sellItem.amount;
 
-        emit _eventListNewItemToMarket(item.id, item.nftId, item.amount, item.seller);
+            fundCertWrap.customTransferFrom(msg.sender, address(this), _nftId, _amount);
+            uint256 idWrap = fundCertWrap.getCurrentId();
+            
+            Item memory item;
+            item.id = id.current();
+            item.amount = _amount;
+            item.nftId = idWrap - 1;
+            item.nftAddress = _nftAddress;
+            item.seller = msg.sender;
+            item.nftContract = FundCertWrap(_nftAddress);
+            items.push(item);
+            id.increment();
+
+            emit _eventListNewItemToMarket(item.id, item.nftId, item.amount, item.seller);
+        }
     }
 
     function buyItem(Cart[] calldata cart) external nonReentrant whenMarketOpen {
         for (uint256 i = 0; i < cart.length; i++) {
             Item memory itemSelected = items[cart[i].index];
-           
-            fundCertWrap = FundCertWrap(itemSelected.nftAddress);
+            address contractAddress = itemSelected.nftAddress;
+            fundCertWrap = FundCertWrap(contractAddress);
             require(fundCertWrap.isNotExpired(), "ETF was expired");
             require(cart[i].amount <= itemSelected.amount, "amount item selected must be less than or equal amount item selling");
 
@@ -96,16 +106,17 @@ contract FundCertMarketplace is Ownable, ERC1155Receiver, ReentrancyGuard{
             uint256 actualValue = nftPrice * cart[i].amount;
             uint256 etherValueFromWei = actualValue/(1 ether);
             // payment by amount item
-            IERC20(paymentToken).safeTransferFrom(msg.sender, itemSelected.nftAddress, etherValueFromWei);
+            IERC20(paymentToken).safeTransferFrom(msg.sender, contractAddress, etherValueFromWei);
             // transfer NFT to buyer
             itemSelected.nftContract.customTransferFrom(address(this), msg.sender, itemSelected.nftId, cart[i].amount);
+
             if(cart[i].amount < itemSelected.amount){
                 items[cart[i].index].amount -= cart[i].amount;
             } else {
                 removeItemByIndex(cart[i].index);
             }
             // emit event buy
-            emit _eventBuyItemInMarket(itemSelected.id, itemSelected.nftId, cart[i].amount, etherValueFromWei, itemSelected.seller, msg.sender);
+            emit _eventBuyItemInMarket(itemSelected.id, itemSelected.nftId, cart[i].amount, etherValueFromWei, itemSelected.seller, msg.sender, contractAddress);
         }
     }
 
