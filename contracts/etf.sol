@@ -401,11 +401,10 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
 
             uint256 holdingTime;
             unchecked {
-                // update intervest paid for trader
+                
                 uint256 duringETF = (currentTime - etfInfor.issueDate)/unitTime;
                 uint256 currentTerm = duringETF/etfInfor.intervestTerm;
                 uint256 remindNumber = duringETF%etfInfor.intervestTerm;
-                // PriceSellNow memory priceSellNow = getPriceWhenSellNow(seller, buyItem.tokenId);
 
                 if(remindNumber > 0){
                     currentTerm += 1;
@@ -414,17 +413,17 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
                 if(currentTerm > numberTerm){
                     currentTerm = numberTerm;
                 }
-            
+                uint256 userProfit = 0;
                 if(currentTerm > 0){
                     uint256 startTerm = userVest[seller][buyItem.tokenId][currentTerm - 1].vestDate - (etfInfor.intervestTerm * unitTime);
                     uint256 endTerm = userVest[seller][buyItem.tokenId][currentTerm - 1].vestDate;
                     uint256 holdDate = holders[seller][buyItem.tokenId];
                     if(holdDate > startTerm && holdDate <= endTerm){
                         holdingTime = (currentTime - holdDate)/unitTime;
-                        uint256 userProfit = (((etfInfor.price * intervestTermRate)/baseRate)*holdingTime)/365;
-                        userVest[buyer][currentId][currentTerm - 1].intervestPayed += userProfit;
+                        userProfit = (((etfInfor.price * intervestTermRate)/baseRate)*holdingTime)/365;
                     }
                 }
+                userVest[buyer][currentId][currentTerm - 1].intervestPayed += userProfit;
             }
 
             if(balanceOf(seller, buyItem.tokenId) == 0){
