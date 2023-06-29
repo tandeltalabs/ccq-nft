@@ -40,7 +40,7 @@ contract FundCertMarketplace is Ownable, ERC1155Receiver, ReentrancyGuard{
     }
 
     struct Cart {
-        uint256 index;
+        uint256 id;
         uint256 amount;
     }
 
@@ -96,7 +96,7 @@ contract FundCertMarketplace is Ownable, ERC1155Receiver, ReentrancyGuard{
 
     function buyItem(Cart[] calldata cart) external nonReentrant whenMarketOpen {
         for (uint256 i = 0; i < cart.length; i++) {
-            Item memory itemSelected = items[cart[i].index];
+            Item memory itemSelected = findItemById(cart[i].id);
             address contractAddress = itemSelected.nftAddress;
             fundCertWrap = FundCertWrap(contractAddress);
             require(fundCertWrap.isNotExpired(), "ETF was expired");
@@ -111,9 +111,9 @@ contract FundCertMarketplace is Ownable, ERC1155Receiver, ReentrancyGuard{
             itemSelected.nftContract.customTransferFrom(address(this), msg.sender, itemSelected.nftId, cart[i].amount);
 
             if(cart[i].amount < itemSelected.amount){
-                items[cart[i].index].amount -= cart[i].amount;
+                updateAmountById(cart[i].id, cart[i].amount);
             } else {
-                removeItemByIndex(cart[i].index);
+                removeItemById(cart[i].id);
             }
             // emit event buy
             emit _eventBuyItemInMarket(itemSelected.id, itemSelected.nftId, cart[i].amount, etherValueFromWei, itemSelected.seller, msg.sender, contractAddress);
@@ -121,21 +121,28 @@ contract FundCertMarketplace is Ownable, ERC1155Receiver, ReentrancyGuard{
     }
 
     function delistItem(
-        uint256 _index,
-        uint256 _amount
+        uint256[] memory _ids,
+        uint256[] memory _amounts
     ) public {
-        Item memory item = items[_index];
-        require(item.seller == msg.sender, "not ownerable of this NFT");
-        require(_amount <= item.amount, "amount item selected must be less than or equal amount item selling");
-        if(_amount == item.amount){
-            item.nftContract.customTransferFrom(address(this), item.seller, item.nftId, item.amount);
-            removeItemByIndex(_index);
-        } else {
-            item.nftContract.customTransferFrom(address(this), item.seller, item.nftId, _amount);
-            items[_index].amount -= _amount;
+        require(_ids.length == _amounts.length, "Number item in two array must be the same");
+        for (uint i = 0; i < _ids.length; i++) {
+            uint256 _id = _ids[i];
+            uint256 _amount = _amounts[i];
+            Item memory item = findItemById(_id);
+
+            require(item.seller == msg.sender, "not ownerable of this NFT");
+            require(_amount <= item.amount, "amount item selected must be less than or equal amount item selling");
+
+            if(_amount == item.amount){
+                item.nftContract.customTransferFrom(address(this), item.seller, item.nftId, item.amount);
+                removeItemById(_id);
+            } else {
+                item.nftContract.customTransferFrom(address(this), item.seller, item.nftId, _amount);
+                updateAmountById(_id, _amount);
+            }
+        
+            emit _eventDelistItem(item.id, item.nftId, item.amount, item.seller);
         }
-       
-        emit _eventDelistItem(item.id, item.nftId, item.amount, item.seller);
     }
 
     function cleanMarket() public onlyOwner{
@@ -146,9 +153,36 @@ contract FundCertMarketplace is Ownable, ERC1155Receiver, ReentrancyGuard{
         }
     }
 
+    function updateAmountById(uint256 _id, uint256 _sellAmount) internal {
+        for (uint i = 0; i < items.length; i++) {
+            if(items[i].id == _id){
+                items[i].amount -= _sellAmount;
+            }
+        }
+    }
+
     function removeItemByIndex(uint256 _index) internal {
         items[_index] = items[items.length - 1];
         items.pop();
+    }
+
+    function removeItemById(uint256 _id) internal {
+        for (uint i = 0; i < items.length; i++) {
+            if(items[i].id == _id){
+                items[i] = items[items.length - 1];
+                items.pop();
+            }
+        }
+    }
+
+    function findItemById(uint256 _id) view internal returns(Item memory) {
+        for (uint i = 0; i < items.length; i++) {
+            if(items[i].id == _id){
+                return items[i];
+            }
+        }
+        
+        return items[0];
     }
 
     function addPublisher(address _publisher) public onlyOwner{
