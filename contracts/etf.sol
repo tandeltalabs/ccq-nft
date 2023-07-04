@@ -300,10 +300,18 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         whenNotExpired
     {
         address seller = msg.sender;
+        uint256 totalAmount;
+        for (uint i = 0; i < amounts.length; i++) {
+            totalAmount += amounts[i];
+        }
+
+        require(totalAmount > 0, "Total token must bigger than 0");
+        uint256 pricePerToken = price/totalAmount;
 
         for (uint i = 0; i < tokenIds.length; i++) {
             uint256 tokenId = tokenIds[i];
             uint256 amount = amounts[i];
+            uint256 tokenPrice = pricePerToken * amount;
             // validate amount
             require(balanceOf(seller, tokenId) >= amount, "amount must be less than or equal to balance");
 
@@ -313,12 +321,12 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
             safeTransferFrom(seller, address(this), tokenId, amount, "");
 
             // update order
-            orderP2P[seller].push(NFTTradeP2P(orderId, buyer, true, tokenId, block.timestamp, amount, price));
-            orderP2P[buyer].push(NFTTradeP2P(orderId, seller, false, tokenId, block.timestamp, amount, price));
+            orderP2P[seller].push(NFTTradeP2P(orderId, buyer, true, tokenId, block.timestamp, amount, tokenPrice));
+            orderP2P[buyer].push(NFTTradeP2P(orderId, seller, false, tokenId, block.timestamp, amount, tokenPrice));
 
             _orderId.increment();
 
-            emit _eventListP2P(seller, buyer, tokenId, amount, amount * price, orderId);
+            emit _eventListP2P(seller, buyer, tokenId, amount, amount * tokenPrice, orderId);
         }
         
     }
@@ -376,11 +384,19 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         whenNotExpired
     {
         address buyer = msg.sender;
+        uint256 currentTime = block.timestamp;
+        uint256 currentTerm = getTermByTime(currentTime);
+
         for (uint i = 0; i < orderIds.length; i++) {
             uint256 orderId = orderIds[i];
             NFTTradeP2P memory buyItem = findItemP2PItem(buyer, orderId);
+
+            // validate
             require(buyItem.orderId > 0, "order not found");
             address seller = buyItem.user;
+            uint256 holdDate = holders[seller][buyItem.tokenId];
+            require(getTermByTime(holdDate) == currentTerm, "Buy P2P must be in a same term");
+
             // payment
             IERC20(paymentToken).safeTransferFrom(buyer, seller, buyItem.price);
 
@@ -389,8 +405,7 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
             uint256 currentId = Counters.current(_fcwId);
             _mint(buyer, currentId, buyItem.amount, "");
 
-            // update information
-            uint256 currentTime = block.timestamp;
+            // update new id token information
             if(currentTime < etfInfor.issueDate) {
                 currentTime = etfInfor.issueDate;
             }
@@ -400,32 +415,23 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
             tokensOwned[buyer].push(currentId);
 
             uint256 holdingTime;
+
+            // update profit paid for user
             unchecked {
-                
-                uint256 duringETF = (currentTime - etfInfor.issueDate)/unitTime;
-                uint256 currentTerm = duringETF/etfInfor.intervestTerm;
-                uint256 remindNumber = duringETF%etfInfor.intervestTerm;
-
-                if(remindNumber > 0){
-                    currentTerm += 1;
-                }
-
-                if(currentTerm > numberTerm){
-                    currentTerm = numberTerm;
-                }
+                uint256 oldPrice = getPriceAtTime(holdDate);
+                uint256 currentPrice = getPriceAtTime(currentTime);
+                uint256 startTerm = userVest[seller][buyItem.tokenId][currentTerm - 1].vestDate - (etfInfor.intervestTerm * unitTime);
+                uint256 endTerm = userVest[seller][buyItem.tokenId][currentTerm - 1].vestDate;
                 uint256 userProfit = 0;
-                if(currentTerm > 0){
-                    uint256 startTerm = userVest[seller][buyItem.tokenId][currentTerm - 1].vestDate - (etfInfor.intervestTerm * unitTime);
-                    uint256 endTerm = userVest[seller][buyItem.tokenId][currentTerm - 1].vestDate;
-                    uint256 holdDate = holders[seller][buyItem.tokenId];
-                    if(holdDate > startTerm && holdDate <= endTerm){
-                        holdingTime = (currentTime - holdDate)/unitTime;
-                        userProfit = (((etfInfor.price * intervestTermRate)/baseRate)*holdingTime)/365;
-                    }
+                if(holdDate > startTerm && holdDate <= endTerm && currentPrice > oldPrice){
+                    userProfit = currentPrice - oldPrice;
                 }
-                userVest[buyer][currentId][currentTerm - 1].intervestPayed += userProfit;
+
+                userVest[msg.sender][currentId][currentTerm - 1].intervestPayed += userProfit;
+                
             }
 
+            // check balance and remove record if token balance is 0
             if(balanceOf(seller, buyItem.tokenId) == 0){
                 removeByTokenId(seller, buyItem.tokenId);
                 delete holders[seller][buyItem.tokenId];
@@ -442,6 +448,26 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
             emit _eventBuyP2P(seller, buyer, currentId, buyItem.amount, buyItem.price, orderId, holdingTime);
         }
        
+    }
+
+    function getTermByTime(uint256 _time) public view returns(uint256) {
+        uint256 duringETF = (_time - etfInfor.issueDate)/unitTime;
+        uint256 currentTerm = duringETF/etfInfor.intervestTerm;
+        uint256 remindNumber = duringETF%etfInfor.intervestTerm;
+
+        if(remindNumber > 0){
+            currentTerm += 1;
+        }
+
+        if(currentTerm > numberTerm){
+            currentTerm = numberTerm;
+        }
+
+        if(currentTerm == 0) {
+            currentTerm += 1;
+        }
+
+        return currentTerm;
     }
 
     // get intervest when intervest term are due
@@ -519,7 +545,6 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         if(totalProfitNft > 0){
             uint256 etherValue = etherFromWei(totalProfitNft);
             IERC20(paymentToken).safeTransfer(account, etherValue);
-            totalProfitPublisher += totalProfitNft;
         }
 
         uint256 profit = profitOnceTerm[_termIndex];
@@ -535,7 +560,6 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
             uint256 profitParsed = etherFromWei(dProfit);
             IERC20(paymentToken).safeTransfer(account, profitParsed);
             delete deviatedProfit[_termIndex];
-            totalProfitPublisher += dProfit;
         }
     }
 
