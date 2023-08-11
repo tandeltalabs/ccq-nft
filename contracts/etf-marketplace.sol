@@ -24,7 +24,9 @@ contract FundCertMarketplace is Ownable, ERC1155Receiver, ReentrancyGuard{
     FundCertWrap fundCertWrap;
     address public paymentToken;
     bool public isOpen;
-   
+    uint256 decimals;
+    bool unActivated = true;
+    
     struct Item {
         uint256 id;
         uint256 nftId;
@@ -46,9 +48,10 @@ contract FundCertMarketplace is Ownable, ERC1155Receiver, ReentrancyGuard{
 
     Item[] public items;
 
-    constructor(address _paymentToken, bool _isOpen) {
+    constructor(address _paymentToken, bool _isOpen, uint256 _decimals) {
         paymentToken = _paymentToken;
         isOpen = _isOpen;
+        decimals = _decimals;
     }
 
     modifier onlyPublisher(address _publisher) {
@@ -69,6 +72,10 @@ contract FundCertMarketplace is Ownable, ERC1155Receiver, ReentrancyGuard{
         address _nftAddress,
         SellItem[] memory sellItems
     ) whenMarketOpen onlyPublisher(msg.sender) public {
+        if(unActivated){
+            unActivated = false;
+        }
+
         fundCertWrap = FundCertWrap(_nftAddress);
         require(fundCertWrap.isNotExpired(), "ETF was expired");
 
@@ -104,7 +111,7 @@ contract FundCertMarketplace is Ownable, ERC1155Receiver, ReentrancyGuard{
 
             uint256 nftPrice = fundCertWrap.getPriceAtTime(block.timestamp);
             uint256 actualValue = nftPrice * cart[i].amount;
-            uint256 etherValueFromWei = actualValue/(1 ether);
+            uint256 etherValueFromWei = parseAmountToDecimals(actualValue);
             // payment by amount item
             IERC20(paymentToken).safeTransferFrom(msg.sender, contractAddress, etherValueFromWei);
             // transfer NFT to buyer
@@ -118,6 +125,14 @@ contract FundCertMarketplace is Ownable, ERC1155Receiver, ReentrancyGuard{
             // emit event buy
             emit _eventBuyItemInMarket(itemSelected.id, itemSelected.nftId, cart[i].amount, etherValueFromWei, itemSelected.seller, msg.sender, contractAddress);
         }
+    }
+
+    function parseAmountToDecimals(uint256 _amount) view internal returns(uint256) {
+        if(decimals == 0){
+            return _amount/(1 ether);
+        }
+
+        return _amount;
     }
 
     function delistItem(
@@ -193,8 +208,11 @@ contract FundCertMarketplace is Ownable, ERC1155Receiver, ReentrancyGuard{
         publishers[_publisher] = false;
     }
 
-    function setPaymentToken(address _paymentToken) public onlyOwner{
+    function setPaymentToken(address _paymentToken, uint256 _decimals) public onlyOwner{
+        // validate only set when there are no trading activities
+        require(unActivated, "only set when there are no trading activities");
         paymentToken = _paymentToken;
+        decimals = _decimals;
     }
 
     function setMartketStatus(bool _status) public onlyOwner{
