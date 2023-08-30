@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.9;
+pragma solidity ^0.8.18;
 
 import "@openzeppelin/contracts/token/ERC1155/ERC1155.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
@@ -62,10 +62,9 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
 
     
     uint256 constant PUBLISHER_TOKEN_WRAPPED_ID = 0;
-    uint256 unitTime = 1 days;
+    uint256 unitTime = 1 minutes;
     address public paymentToken;
     address public marketplace;
-    address public withdrawer = 0x0f21FA8A0019e6D0c49705c81B30430993364c4B;
     uint256 public baseRate = 1000;
     uint256 public numberTerm = 5;
     uint256 public intervestTermRate = 80; 
@@ -78,7 +77,6 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
 
     InterestRate[] interestRate;
     ETFInformation public etfInfor;
-    mapping(address => bool) whitelists;
     mapping(address => mapping(uint256 => uint256)) public holders;
     mapping(address => mapping(uint256 => Vest[])) public userVest;
     mapping(address => NFTTradeP2P[]) public orderP2P;
@@ -88,6 +86,7 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
     mapping(uint256 => uint256) public profitOnceTerm;
     mapping(uint256 => uint256) public actualUserProfit;
     mapping(uint256 => uint256) public deviatedProfit;
+    mapping(address => bool) public blacklists;
     
     constructor( 
         address _publisher,
@@ -111,7 +110,7 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         if(_decimals == 0) {
             unit = 1 ether;
         } else {
-            unit = 10**_decimals;
+            unit = 1;
         }
 
         etfInfor.publisher = _publisher;
@@ -130,35 +129,21 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         
         mint(_publisher, _issueDate, _intervestTerm, _price * unit, _totalSupply);
     }
-
-    modifier validIssueDate(uint256 _issueDate){
-        require(block.timestamp  <= _issueDate, "issue date must be greater than or equal to now");
-        _;
-    }
-
-    modifier onlyExpireDate(){
-        require(block.timestamp >= etfInfor.expireDate , "undue");
-        _;
-    }
-
-    modifier onlySellInTime(){
-        require(block.timestamp >= etfInfor.issueDate, "Can only be sold after the release time");
-        _;
-    }
-
-    modifier whenNotExpired(){
+    
+    function whenNotExpired() private view {
         require(block.timestamp < etfInfor.expireDate , "ETF was expired");
-        _;
     }
 
-    modifier onlyPublisher(address _user){
-        require(_user == etfInfor.publisher, "must be publisher");
-        _;
-    }
-
-    modifier onlyUser(){
+    function onlyUser() private view {
         require(msg.sender != etfInfor.publisher, "publisher can not use this feature");
-        _;
+    }
+
+    function notInBlacklist() private view {
+        require(blacklists[msg.sender] == false, "User in blacklist");
+    }
+
+    function onlySellInTime() private view {
+        require(block.timestamp >= etfInfor.issueDate, "Can only be sold after the release time");
     }
 
     event _eventListP2P(address _seller, address _buyer, uint256 _tokenId, uint256 _amount, uint256 _totalValue, uint256 _orderId);
@@ -194,11 +179,13 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
     /* user sell nft for publisher */ 
     function sellNow(uint256[] memory tokenIds, uint256[] memory amounts)
         public
-        onlyUser
         whenNotPaused
-        whenNotExpired
-        onlySellInTime
     {       
+        whenNotExpired();
+        onlyUser();
+        notInBlacklist();
+        onlySellInTime();
+        
         // validate
         uint256 timeNow = block.timestamp;
         for (uint i = 0; i < tokenIds.length; i++) {
@@ -311,12 +298,13 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         return orderP2P[_user];
     }
 
-    function listP2P(address _buyer, uint256[] memory tokenIds, uint256[] memory amounts, uint256 price) public 
+    function listP2P(address _buyer, uint256[] memory tokenIds, uint256[] memory amounts, uint256 price) public
         whenNotPaused
-        onlyUser
-        whenNotExpired
-        onlySellInTime
     {
+        whenNotExpired();
+        onlyUser();
+        notInBlacklist();
+        onlySellInTime();
         uint256 actualPrice = price;
         if(decimals == 0) {
             actualPrice = price*unit;
@@ -375,6 +363,7 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
     }
 
     function deListingP2P(uint256[] memory orderIds) public whenNotPaused{
+        notInBlacklist();
         address user = msg.sender;
         for (uint i = 0; i < orderIds.length; i++) {
             uint256 orderId = orderIds[i];
@@ -447,11 +436,12 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
     }
 
     function buyP2P(uint256[] memory orderIds) 
-        public 
-        onlyUser
+        public
         whenNotPaused
-        whenNotExpired
     {
+        whenNotExpired();
+        onlyUser();
+        notInBlacklist();
         address buyer = msg.sender;
         uint256 currentTime = block.timestamp;
         uint256 currentTerm = getTermByTime(currentTime);
@@ -540,9 +530,10 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
     // get intervest when intervest term are due
     function harvest(uint256[] memory _tokenIds, uint256 _index)
         whenNotPaused
-        onlyUser
         public
     {      
+        onlyUser();
+        notInBlacklist();
         address account = msg.sender;
 
         for (uint i = 0; i < _tokenIds.length; i++) {
@@ -572,18 +563,10 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         }
     }
 
-    function getMyAsset(address _user) public view returns(uint256[] memory) {
-        return tokensOwned[_user];
-    }
-
-    function getMyVestList(address _user, uint256 _tokenId) public view returns(Vest[] memory){
-        return userVest[_user][_tokenId];
-    }
-
     function withdrawIntervest(uint256 _termIndex)
-        onlyPublisher(msg.sender)
         public
     {   
+        require(msg.sender == etfInfor.publisher, "must be publisher");
         address account = msg.sender;
         uint256 totalProfitNft;
         for(uint256 index = 0; index < tokensOwned[msg.sender].length; index++) {
@@ -645,7 +628,6 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
 
     // return intervest after users trading
     function getIntervest(address _publisher, uint256 _termIndex)
-        onlyPublisher(_publisher)
         public
         view
         returns(uint256)
@@ -670,13 +652,21 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         return profitOnceTerm[_termIndex] + totalIntervest + deviatedProfit[_termIndex];
     }
 
-    function isIntervestPayed(address _user, uint256 _paymentDate) public view returns(bool) {
-        return intervestHistory[_user][_paymentDate];
+    function getMyAsset(address _user) public view returns(uint256[] memory) {
+        return tokensOwned[_user];
     }
 
-    function isAdvanceIntervestPayed(address _user, uint256 _paymentDate) public view returns(bool) {
-        return intervestTempHistory[_user][_paymentDate];
+    function getMyVestList(address _user, uint256 _tokenId) public view returns(Vest[] memory){
+        return userVest[_user][_tokenId];
     }
+
+    // function isIntervestPayed(address _user, uint256 _paymentDate) public view returns(bool) {
+    //     return intervestHistory[_user][_paymentDate];
+    // }
+
+    // function isAdvanceIntervestPayed(address _user, uint256 _paymentDate) public view returns(bool) {
+    //     return intervestTempHistory[_user][_paymentDate];
+    // }
 
     // return price and intervest depend on time in intervest term
     function getPriceAtTime(uint256 _time) public view returns(uint256) {
@@ -698,9 +688,10 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
     function redeem(uint256[] memory tokenIds, uint256[] memory amounts) 
         public 
         whenNotPaused 
-        onlyUser 
-        onlyExpireDate
     {
+        notInBlacklist();
+        onlyUser();
+        require(block.timestamp >= etfInfor.expireDate , "undue");
         address account = msg.sender;
 
         for (uint i = 0; i < tokenIds.length; i++) {
@@ -770,6 +761,7 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
     }
 
     function customTransferFrom(address from, address to, uint256 id, uint256 amount) public whenNotPaused {
+        notInBlacklist();
         require(msg.sender == marketplace, "caller must be from market");
 
         uint256 currentId = Counters.current(_fcwId);
@@ -800,12 +792,19 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         Counters.increment(_fcwId);
     }
 
-    function setWithdrawer(address _withdrawer) public onlyOwner {
-        withdrawer = _withdrawer;
+    function setBlacklist(address[] memory _addresses) public onlyOwner {
+        for (uint256 index = 0; index < _addresses.length; index++) {
+            blacklists[_addresses[index]] = true;
+        }
     }
 
-    function emergencyWithdrawal() public {
-        require(msg.sender == withdrawer, "Forbiden"); 
+    function removeBlacklist(address[] memory _addresses) public onlyOwner {
+        for (uint256 index = 0; index < _addresses.length; index++) {
+            blacklists[_addresses[index]] = false;
+        }
+    }
+
+    function emergencyWithdrawal() public onlyOwner {
         uint256 amount = IERC20(paymentToken).balanceOf(address(this));
         IERC20(paymentToken).transfer(msg.sender, amount);
     }
