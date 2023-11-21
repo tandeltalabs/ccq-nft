@@ -60,6 +60,11 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         uint256 totalSupply;
     }
 
+    struct EtfType {
+        bool isTrade;
+        bool isInvest;
+        uint mortgageStatus; // 0 - NO, 1 - ASSET, 2 - SHARE
+    }
     
     uint256 constant PUBLISHER_TOKEN_WRAPPED_ID = 0;
     uint256 unitTime = 1 minutes;
@@ -77,6 +82,8 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
 
     InterestRate[] interestRate;
     ETFInformation public etfInfor;
+    EtfType public etfType;
+
     mapping(address => mapping(uint256 => uint256)) public holders;
     mapping(address => mapping(uint256 => Vest[])) public userVest;
     mapping(address => NFTTradeP2P[]) public orderP2P;
@@ -87,25 +94,22 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
     mapping(uint256 => uint256) public actualUserProfit;
     mapping(uint256 => uint256) public deviatedProfit;
     mapping(address => bool) public blacklists;
+    mapping(address => bool) public memberAuthorize;
     
     constructor( 
         address _publisher,
         string memory _name, 
-        uint256 _issueDate, 
-        uint256 _totalSupply, 
-        uint256 _intervestTerm,
-        uint256 _numberTerm, 
-        uint256 _intervestTermRate,
-        uint256 _price,
+        uint256[] memory etfConfigs, // 0:_issueDate, 1: _totalSupply, 2:_intervestTerm, 3: _numberTerm, 4: _intervestTermRate, 5: _price
         address _paymentToken,
         uint256 _decimals,
-        address _marketplace
+        address _marketplace,
+        EtfType memory _etfType
     ) ERC1155("") {
         paymentToken = _paymentToken;
         decimals = _decimals;
         marketplace = _marketplace;
-        numberTerm = _numberTerm;
-        intervestTermRate = _intervestTermRate;
+        numberTerm = etfConfigs[3];
+        intervestTermRate = etfConfigs[4];
 
         if(_decimals == 0) {
             unit = 1 ether;
@@ -115,27 +119,30 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
 
         etfInfor.publisher = _publisher;
         etfInfor.name = _name;
-        etfInfor.issueDate = _issueDate;
-        etfInfor.expireDate = _issueDate + _numberTerm * _intervestTerm * unitTime;
-        etfInfor.intervestTerm = _intervestTerm;
-        etfInfor.price = _price * unit;
-        etfInfor.totalSupply = _totalSupply;
+        etfInfor.issueDate = etfConfigs[0];
+        etfInfor.expireDate = etfConfigs[0] + etfConfigs[3] * etfConfigs[2] * unitTime;
+        etfInfor.intervestTerm = etfConfigs[2];
+        etfInfor.price = etfConfigs[5] * unit;
+        etfInfor.totalSupply = etfConfigs[1];
 
-        onceTermIntervest = _totalSupply*(((_price * unit * _intervestTermRate)/baseRate) * _intervestTerm)/365;
+        etfType.isInvest = _etfType.isInvest;
+        etfType.isTrade = _etfType.isTrade;
+        etfType.mortgageStatus = _etfType.mortgageStatus;
+        onceTermIntervest = etfConfigs[1]*(((etfConfigs[5] * unit * etfConfigs[4])/baseRate) * etfConfigs[2])/365;
 
         interestRate.push(InterestRate(1, 14, 60));
         interestRate.push(InterestRate(15, 29, 70));
         interestRate.push(InterestRate(30, 92, 80));
         
-        mint(_publisher, _issueDate, _intervestTerm, _price * unit, _totalSupply);
+        mint(_publisher, etfConfigs[0], etfConfigs[2], etfConfigs[5] * unit, etfConfigs[1]);
     }
-    
+
     function whenNotExpired() private view {
         require(block.timestamp < etfInfor.expireDate , "ETF was expired");
     }
 
     function onlyUser() private view {
-        require(msg.sender != etfInfor.publisher, "publisher can not use this feature");
+        require(msg.sender != etfInfor.publisher, "only user");
     }
 
     function notInBlacklist() private view {
@@ -143,7 +150,11 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
     }
 
     function onlySellInTime() private view {
-        require(block.timestamp >= etfInfor.issueDate, "Can only be sold after the release time");
+        require(block.timestamp >= etfInfor.issueDate, "invalid time");
+    }
+
+    function multiRoleCheck() private view {
+        require(msg.sender == owner() || memberAuthorize[msg.sender] == true, "Not permisstion");
     }
 
     event _eventListP2P(address _seller, address _buyer, uint256 _tokenId, uint256 _amount, uint256 _totalValue, uint256 _orderId);
@@ -193,8 +204,8 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
             uint256 amount = amounts[i];
             require(exists(tokenId), "NFT not exist");
             uint256 balance = balanceOf(msg.sender, tokenId);
-            require(balance > 0, "not owner of this tokenId");
-            require(amount <= balance, "number of nft must be less than or equal to balance");
+            require(balance > 0, "not own");
+            require(amount <= balance, "not enough balance");
 
             // burn current NFT of user
             ERC1155Burnable.burn(msg.sender, tokenId, amount);
@@ -315,7 +326,7 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
             totalAmount += amounts[i];
         }
 
-        require(totalAmount > 0, "Total token must bigger than 0");
+        require(totalAmount > 0, "Total token > 0");
         uint256 pricePerToken = actualPrice/totalAmount;
 
         for (uint i = 0; i < tokenIds.length; i++) {
@@ -325,7 +336,7 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
             address buyer = _buyer;
             uint256 sellerBalance = balanceOf(seller, tokenId);
             // validate amount
-            require(sellerBalance >= amount, "amount must be less than or equal to balance");
+            require(sellerBalance >= amount, "amount <= balance");
 
             // burn oldToken
             ERC1155Burnable.burn(seller, tokenId, amount);
@@ -445,7 +456,7 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         address buyer = msg.sender;
         uint256 currentTime = block.timestamp;
         uint256 currentTerm = getTermByTime(currentTime);
-        require(currentTerm <= numberTerm, "over time, nft was in time redeem");
+        require(currentTerm <= numberTerm, "over time");
 
         for (uint i = 0; i < orderIds.length; i++) {
             uint256 orderId = orderIds[i];
@@ -660,14 +671,6 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         return userVest[_user][_tokenId];
     }
 
-    // function isIntervestPayed(address _user, uint256 _paymentDate) public view returns(bool) {
-    //     return intervestHistory[_user][_paymentDate];
-    // }
-
-    // function isAdvanceIntervestPayed(address _user, uint256 _paymentDate) public view returns(bool) {
-    //     return intervestTempHistory[_user][_paymentDate];
-    // }
-
     // return price and intervest depend on time in intervest term
     function getPriceAtTime(uint256 _time) public view returns(uint256) {
         uint256 currentTime = _time;
@@ -730,7 +733,7 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         return holders[_user][_id];
     }
 
-    function removeByTokenId(address _user, uint256 _id) internal {
+    function removeByTokenId(address _user, uint256 _id) private {
         uint256 totalItem = tokensOwned[_user].length;
         for (uint256 index = 0; index < totalItem; index++) {
             if(tokensOwned[_user][index] == _id){
@@ -745,7 +748,7 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         marketplace = _marketplace;
     }
 
-    function convertToOriginValueFromWei(uint256 _weiValue) view internal returns(uint256) {
+    function convertToOriginValueFromWei(uint256 _weiValue) view private returns(uint256) {
         if(decimals != 0){
             return _weiValue;
         }
@@ -762,12 +765,13 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
 
     function customTransferFrom(address from, address to, uint256 id, uint256 amount) public whenNotPaused {
         notInBlacklist();
-        require(msg.sender == marketplace, "caller must be from market");
+        require(msg.sender == marketplace, "sender not Permission");
+        require(etfType.isTrade == true, "Not Permission");
 
         uint256 currentId = Counters.current(_fcwId);
         uint256 balanceFrom = balanceOf(from, id);
 
-        require(balanceFrom >= amount, "ERC1155: insufficient balance for transfer");
+        require(balanceFrom >= amount, "ERC1155:insufficient balance");
 
         _burn(from, id, amount);
 
@@ -792,16 +796,26 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         Counters.increment(_fcwId);
     }
 
-    function setBlacklist(address[] memory _addresses) public onlyOwner {
+    function setBlacklist(address[] memory _addresses) public {
+        multiRoleCheck();
         for (uint256 index = 0; index < _addresses.length; index++) {
             blacklists[_addresses[index]] = true;
         }
     }
 
-    function removeBlacklist(address[] memory _addresses) public onlyOwner {
+    function removeBlacklist(address[] memory _addresses) public {
+        multiRoleCheck();
         for (uint256 index = 0; index < _addresses.length; index++) {
             blacklists[_addresses[index]] = false;
         }
+    }
+
+    function setMemberAuthorize(address member) public onlyOwner {
+        memberAuthorize[member] = true;
+    }
+
+    function removeMemberAuthorize(address member) public onlyOwner {
+        memberAuthorize[member] = false;
     }
 
     function emergencyWithdrawal() public onlyOwner {
@@ -809,11 +823,20 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         IERC20(paymentToken).transfer(msg.sender, amount);
     }
 
-    function pause() public onlyOwner {
+    function setConfigType(bool _isTrade, bool _isInvest, uint _mortgageStatus) public {
+        multiRoleCheck();
+        etfType.isTrade = _isTrade;
+        etfType.isInvest = _isInvest;
+        etfType.mortgageStatus = _mortgageStatus;
+    }
+
+    function pause() public {
+        multiRoleCheck();
         _pause();
     }
 
-    function unpause() public onlyOwner {
+    function unpause() public {
+        multiRoleCheck();
         _unpause();
     }
 
@@ -836,7 +859,7 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         uint256[] calldata,
         bytes calldata
     ) public pure override returns (bytes4) {
-        revert("batch transfers not supported");
+        revert("forbiden");
     }
 
     function supportsInterface(bytes4 interfaceId) 
@@ -852,7 +875,7 @@ contract FundGoETFWrapped is ERC1155, Ownable, Pausable, ERC1155Burnable, ERC115
         whenNotPaused
         override(ERC1155, ERC1155Supply)
     {
-        require(from == address(0) || to == address(0) || to == address(this) || from == address(this), "this NFT only trade with this contract");
+        require(from == address(0) || to == address(0) || to == address(this) || from == address(this), "forbiden");
         super._beforeTokenTransfer(operator, from, to, ids, amounts, data);
     }
 }

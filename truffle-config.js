@@ -56,7 +56,9 @@ module.exports = {
    *
    * $ truffle test --network <network-name>
    */
-
+  plugins: [
+    'truffle-contract-size'
+  ],
   networks: {
     // Useful for testing. The `development` name is special - truffle uses it by default
     // if it's defined here and no other network is specified at the command line.
@@ -111,7 +113,7 @@ module.exports = {
       settings: {          // See the solidity docs for advice about optimization and evmVersion
         optimizer: {
           enabled: true,
-          runs: 100
+          runs: 200
         },
         evmVersion: "byzantium"
       }
